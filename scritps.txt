@@ -1,0 +1,253 @@
+function onFormSubmit(e) {
+  removePreviousEntries(e.values[2], e.values[4]); // Email and Date of reservation
+  sendConfirmationEmail(e); // This will run in the background
+  updateCustomerCountChart(); // This will run after removePreviousEntries
+}
+
+function onPaid(e) {
+  var sheet = e.source.getActiveSheet();
+  var range = e.range;
+
+  // Check if the edited range is in the "Form responses 1" sheet
+  if (sheet.getName() !== "Form responses 1") {
+    return;
+  }
+
+  // Assuming the "Total Spent" column is the 9th column (column I)
+  var editedColumn = range.getColumn();
+  if (editedColumn === 9) {
+    sendReceiptEmail(e);
+    updateProfitChart()
+  }
+}
+
+function sendConfirmationEmail(e) {
+  // Get the submitted data from the form response
+  var responses = e.values;
+  var name = responses[1]; // Name
+  var email = responses[2]; // Email
+  var phoneNumber = responses[3]; // Phone number
+  var reservationDate = responses[4]; // Date of reservation
+  var reservationTime = responses[5]; // Time of reservation
+  var numberOfGuests = responses[6]; // Number of guests
+  var specialRequests = responses[7]; // Special requests (optional)
+  
+  // Email subject and body
+  var subject = "Reservation Confirmation";
+  var body = "Dear " + name + ",\n\n" +
+             "Thank you for your reservation. Please check your details:\n\n" +
+             "Name: " + name + "\n" +
+             "Email: " + email + "\n" +
+             "Phone number: " + phoneNumber + "\n" +
+             "Date of reservation: " + reservationDate + "\n" +
+             "Time of reservation: " + reservationTime + "\n" +
+             "Number of guests: " + numberOfGuests + "\n" +
+             (specialRequests ? "Special requests: " + specialRequests + "\n" : "") +
+             "We look forward to serving you.\n\n" +
+             "Best regards,\n" +
+             "Your Restaurant";
+
+  // Send email
+  MailApp.sendEmail(email, subject, body);
+}
+
+function sendReceiptEmail(e) {
+  var range = e.range;
+  var row = range.getRow();
+  var sheet = e.source.getActiveSheet();
+  
+  // Get the relevant data from the edited row
+  var name = sheet.getRange(row, 2).getValue(); // Name (2nd column)
+  var email = sheet.getRange(row, 3).getValue(); // Email (3rd column)
+  var totalSpent = sheet.getRange(row, 9).getValue(); // Total Spent (9th column)
+
+  // Only send an email if totalSpent is a number
+  if (isNaN(totalSpent) || totalSpent === '') {
+    return;
+  }
+  
+  // Email subject and body
+  var subject = "Digital Receipt";
+  var body =  "Dear " + name + ",\n\n" +
+              "Thank you for your visit. Here is your receipt:\n\n" +
+              "Name: " + name + "\n" +
+              "Total Spent: $" + totalSpent.toFixed(2) + "\n\n" +
+              "Please fill in this feedback form to help us improve:\n" +
+              "https://forms.gle/atNL5D4V8P4NXPDH9\n\n" + 
+              "We look forward to serving you again.\n\n" +
+              "Best regards,\n" +
+              "Your Restaurant";
+
+  // Send email
+  MailApp.sendEmail(email, subject, body);
+}
+
+function removePreviousEntries(email, reservationDate) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Form responses 1");
+  if (!sheet) {
+    Logger.log("Sheet 'Form responses 1' not found.");
+    return;
+  }
+  
+  var dataRange = sheet.getDataRange();
+  var data = dataRange.getValues();
+  
+  // Find the row number of the newest entry
+  var newestEntryRow = data.length - 1; // Default to the last row
+  for (var i = data.length - 1; i >= 1; i--) {
+    var row = data[i];
+    var existingEmail = row[2]; // Email (3rd column, 0-based index 2)
+    var existingDate = row[4]; // Date of reservation (5th column, 0-based index 4)
+    
+    if (existingEmail === email && existingDate === reservationDate) {
+      newestEntryRow = i;
+      break;
+    }
+  }
+
+  // Remove older duplicates
+  for (var i = data.length - 1; i >= 1; i--) {
+    if (i == newestEntryRow) continue; // Skip the newest entry
+    
+    var row = data[i];
+    var existingEmail = row[2]; // Email (3rd column, 0-based index 2)
+    var existingDate = row[4]; // Date of reservation (5th column, 0-based index 4)
+    
+    if (existingEmail === email && existingDate === reservationDate) {
+      sheet.deleteRow(i + 1); // Delete the row (1-based index)
+    }
+  }
+}
+
+function updateCustomerCountChart() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = spreadsheet.getSheetByName("Form responses 1"); // Ensure this is your correct sheet name
+  
+  if (!sheet) {
+    Logger.log("Sheet 'Form responses 1' not found.");
+    return;
+  }
+  
+  var dataRange = sheet.getDataRange();
+  var data = dataRange.getValues();
+  
+  // Create a map to count the total number of guests per reservation date
+  var guestCounts = {};
+  for (var i = 1; i < data.length; i++) { // Skip header row
+    var reservationDate = data[i][4]; // Date of reservation (5th column, 0-based index 4)
+    var numberOfGuests = data[i][6]; // Number of guests (7th column, 0-based index 6)
+    
+    if (reservationDate && !isNaN(numberOfGuests) && numberOfGuests !== '') {
+      if (guestCounts[reservationDate]) {
+        guestCounts[reservationDate] += numberOfGuests;
+      } else {
+        guestCounts[reservationDate] = numberOfGuests;
+      }
+    }
+  }
+  
+  // Convert map to array for chart data
+  var chartData = [];
+  for (var date in guestCounts) {
+    var count = guestCounts[date];
+    chartData.push([date, count]);
+  }
+  
+  if (chartData.length === 0) {
+    Logger.log("No data to create the chart.");
+    return;
+  }
+  
+  // Create a new sheet for the chart if it doesn't exist
+  var chartSheet = spreadsheet.getSheetByName("Customer Chart");
+  if (!chartSheet) {
+    chartSheet = spreadsheet.insertSheet("Customer Chart");
+  } else {
+    chartSheet.clear(); // Clear existing content if sheet exists
+  }
+  
+  // Set the chart data to the new sheet
+  chartSheet.getRange(1, 1, chartData.length + 1, 2).setValues([["Date", "Total Guests"]].concat(chartData));
+  
+  // Check for an existing chart and remove it if it exists
+  var charts = chartSheet.getCharts();
+  if (charts.length > 0) {
+    chartSheet.removeChart(charts[0]); // Remove the first chart if it exists
+  }
+  
+  // Create a new vertical bar chart
+  var chart = chartSheet.newChart()
+    .setChartType(Charts.ChartType.COLUMN) // COLUMN for vertical bar chart
+    .addRange(chartSheet.getRange("A1:B" + (chartData.length + 1)))
+    .setPosition(5, 1, 0, 0)
+    .build();
+  
+  chartSheet.insertChart(chart);
+}
+
+function updateProfitChart() {
+  var spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = spreadsheet.getSheetByName("Form responses 1"); // Ensure this is your correct sheet name
+  
+  if (!sheet) {
+    Logger.log("Sheet 'Form responses 1' not found.");
+    return;
+  }
+  
+  var dataRange = sheet.getDataRange();
+  var data = dataRange.getValues();
+  
+  // Create a map to sum the total profit per reservation date
+  var profitCounts = {};
+  for (var i = 1; i < data.length; i++) { // Skip header row
+    var reservationDate = data[i][4]; // Date of reservation (5th column, 0-based index 4)
+    var totalSpent = data[i][8]; // Total Spent (9th column, 0-based index 8)
+    
+    if (reservationDate && !isNaN(totalSpent) && totalSpent !== '') {
+      if (profitCounts[reservationDate]) {
+        profitCounts[reservationDate] += totalSpent;
+      } else {
+        profitCounts[reservationDate] = totalSpent;
+      }
+    }
+  }
+  
+  // Convert map to array for chart data
+  var chartData = [];
+  for (var date in profitCounts) {
+    var profit = profitCounts[date];
+    chartData.push([date, profit]);
+  }
+  
+  if (chartData.length === 0) {
+    Logger.log("No data to create the chart.");
+    return;
+  }
+  
+  // Create a new sheet for the chart if it doesn't exist
+  var chartSheet = spreadsheet.getSheetByName("Profit Chart");
+  if (!chartSheet) {
+    chartSheet = spreadsheet.insertSheet("Profit Chart");
+  } else {
+    chartSheet.clear(); // Clear existing content if sheet exists
+  }
+  
+  // Set the chart data to the new sheet
+  chartSheet.getRange(1, 1, chartData.length + 1, 2).setValues([["Date", "Total Profit"]].concat(chartData));
+  
+  // Check for an existing chart and remove it if it exists
+  var charts = chartSheet.getCharts();
+  if (charts.length > 0) {
+    chartSheet.removeChart(charts[0]); // Remove the first chart if it exists
+  }
+  
+  // Create a new vertical bar chart
+  var chart = chartSheet.newChart()
+    .setChartType(Charts.ChartType.COLUMN) // COLUMN for vertical bar chart
+    .addRange(chartSheet.getRange("A1:B" + (chartData.length + 1)))
+    .setPosition(5, 1, 0, 0)
+    .build();
+  
+  chartSheet.insertChart(chart);
+}
+
